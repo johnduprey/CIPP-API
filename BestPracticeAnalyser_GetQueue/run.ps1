@@ -1,7 +1,6 @@
 param($name)
 
-$Skiplist = (Get-Content ExcludedTenants -ErrorAction SilentlyContinue | ConvertFrom-Csv -Delimiter "|" -Header "name", "date", "user").name
-$Tenants = Get-Content ".\tenants.cache.json" | ConvertFrom-Json | Where-Object {$Skiplist -notcontains $_.defaultDomainName}
+$Tenants = Get-Content ".\tenants.cache.json" | ConvertFrom-Json
 
 $object = foreach ($Tenant in $Tenants) {
     $Tenant.defaultDomainName
