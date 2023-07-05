@@ -1,218 +1,79 @@
 using namespace System.Net
-
 # Input bindings are passed in via param block.
 param($Request, $TriggerMetadata)
+try {
+    $APIName = $TriggerMetadata.FunctionName
+    Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+    $Username = $request.body.user
+    $Tenantfilter = $request.body.tenantfilter
+    if ($username -eq $null) { exit }
+    $userid = (New-GraphGetRequest -uri "https://graph.microsoft.com/beta/users/$($username)" -tenantid $Tenantfilter).id
+    Set-Location (Get-Item $PSScriptRoot).Parent.FullName
+    $ConvertTable = Import-Csv Conversiontable.csv | Sort-Object -Property 'guid' -Unique
 
-$APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
-$Username = $request.body.user
-$Tenantfilter = $request.body.tenantfilter
-if ($username -eq $null) { exit }
-$userid = (New-GraphGetRequest -uri "https://graph.microsoft.com/beta/users/$($username)" -tenantid $Tenantfilter).id
-
-$ConvertTable = Import-Csv Conversiontable.csv | Sort-Object -Property 'guid' -Unique
-$upn = "notrequired@notrequired.com" 
-$tokenvalue = ConvertTo-SecureString (Get-GraphToken -AppID 'a0c73c16-a7e3-4564-9a95-2bdf47383716' -RefreshToken $ENV:ExchangeRefreshToken -Scope 'https://outlook.office365.com/.default' -Tenantid $tenantFilter).Authorization -AsPlainText -Force
-$credential = New-Object System.Management.Automation.PSCredential($upn, $tokenValue)
-$session = New-PSSession -ConfigurationName Microsoft.Exchange -ConnectionUri "https://ps.outlook.com/powershell-liveid?DelegatedOrg=$($tenantFilter)&BasicAuthToOAuthConversion=true" -Credential $credential -Authentication Basic -AllowRedirection -ea Stop
-
-
-Write-Host ($request.body | ConvertTo-Json)
-$results = switch ($request.body) {
-    { $_.ResetPass -eq 'true' } { 
-        try { 
-            $password = -join ('abcdefghkmnrstuvwxyzABCDEFGHKLMNPRSTUVWXYZ23456789$%&*#'.ToCharArray() | Get-Random -Count 12)
-            $passwordProfile = @"
-                {"passwordProfile": { "forceChangePasswordNextSignIn": true, "password": "$password" }}'
-"@ 
-            $GraphRequest = New-GraphPostRequest -uri "https://graph.microsoft.com/v1.0/users/$($userid)" -tenantid $TenantFilter -type PATCH -body $passwordProfile  -verbose
-            "The new password is $password"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Reset the password for $($username)" -Sev "Info" -tenant $TenantFilter
-
+    Write-Host ($request.body | ConvertTo-Json)
+    $results = switch ($request.body) {
+        { $_."ConvertToShared" -eq 'true' } {
+            Set-CIPPMailboxType -ExecutingUser $request.headers.'x-ms-client-principal' -tenantFilter $tenantFilter -userid $username -username $username -MailboxType "Shared" -APIName "ExecOffboardUser"
         }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not reset password for $($username)" -Sev "Error" -tenant $TenantFilter
-
-            "Could not reset password for $($username). Error: $($_.Exception.Message)"
+        { $_.RevokeSessions -eq 'true' } { 
+            Revoke-CIPPSessions -tenantFilter $tenantFilter -username $username -userid $userid -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
         }
-    }
-    { $_.RemoveGroups -eq 'true' } { 
-      (New-GraphPostRequest -uri "https://graph.microsoft.com/beta/users/$($userid)/GetMemberGroups" -tenantid $tenantFilter -type POST -body  '{"securityEnabledOnly": false}').value | ForEach-Object {
-            $group = $_
-            try { 
-                $RemoveRequest = New-GraphPostRequest -uri "https://graph.microsoft.com/beta/groups/$_/members/$($userid)/`$ref" -tenantid $tenantFilter -type DELETE -body '' -Verbose
-                $Groupname = (New-GraphGetRequest -uri "https://graph.microsoft.com/beta/groups/$_" -tenantid $tenantFilter).displayName
-                "Succesfully removed user from group $Groupname"
-                Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Removed groups for $($username)" -Sev "Info"  -tenant $TenantFilter
-
-            }
-            catch {
-                Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not remove $($username) from group $group" -Sev "Error" -tenant $TenantFilter
-
-                "Could not remove user from group $group"
-            }
-            
+        { $_.ResetPass -eq 'true' } { 
+            Set-CIPPResetPassword -tenantFilter $tenantFilter -userid $username -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
         }
-    }
-
-    { $_."HideFromGAL" -eq 'true' } {
-        try {
-            $HideRequest = New-GraphPostRequest -uri "https://graph.microsoft.com/v1.0/users/$($userid)" -tenantid $tenantFilter -type PATCH -body '{"showInAddressList": false}' -verbose
-            "Hidden from address list"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Hid $($username) from address list" -Sev "Info"  -tenant $TenantFilter
-
+        { $_.RemoveGroups -eq 'true' } { 
+            Remove-CIPPGroups -userid $userid -tenantFilter $Tenantfilter -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
         }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not hide $($username) from address list" -Sev "Error" -tenant $TenantFilter
 
-            "Could not hide $($username) from address list. Error: $($_.Exception.Message)"
+        { $_."HideFromGAL" -eq 'true' } {
+            Set-CIPPHideFromGAL -tenantFilter $tenantFilter -userid $username -HideFromGAL $true -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
         }
-    }
-    { $_."DisableSignIn" -eq 'true' } {
-        try {
-            $DisableUser = New-GraphPostRequest -uri "https://graph.microsoft.com/v1.0/users/$($userid)" -tenantid $TenantFilter -type PATCH -body '{"accountEnabled":false}'  -verbose
-            "Disabled user account for $username"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Disabled $($username)" -Sev "Info"  -tenant $TenantFilter
+        { $_."DisableSignIn" -eq 'true' } {
+            Set-CIPPSignInState -TenantFilter $tenantFilter -userid $username -AccountEnabled $false -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
+        }
 
+        { $_."OnedriveAccess" -ne "" } { 
+            Set-CIPPOnedriveAccess -tenantFilter $tenantFilter -userid $username -OnedriveAccessUser $request.body.OnedriveAccess -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
         }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not disable sign in for $($username)" -Sev "Error" -tenant $TenantFilter
-
-            "Could not disable $($username). Error: $($_.Exception.Message)"
+        { $_."AccessNoAutomap" -ne "" } { 
+            Set-CIPPMailboxAccess -tenantFilter $tenantFilter -userid $username -AccessUser $request.body.AccessNoAutomap -Automap $true -AccessRights @("FullAccess") -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
         }
-        
-    }
-    { $_."ConvertToShared" -eq 'true' } { 
-        try {
-            $ImportedSession = Import-PSSession $session -ea Stop -AllowClobber -CommandName "Set-Mailbox"
-            $Mailbox = Set-mailbox -identity $userid -type Shared -ea Stop
-            "Converted $($username) to Shared Mailbox"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Converted $($username) to a shared mailbox" -Sev "Info" -tenant $TenantFilter
-
+        { $_."AccessAutomap" -ne "" } { 
+            Set-CIPPMailboxAccess -tenantFilter $tenantFilter -userid $username -AccessUser $request.body.AccessNoAutomap -Automap $false -AccessRights @("FullAccess") -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
         }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not convert $username to shared mailbox" -Sev "Error" -tenant $TenantFilter
-            "Could not convert $($username) to a shared mailbox. Error: $($_.Exception.Message)"
-        }
-    }
-    { $_."OnedriveAccess" -ne "" } { 
-        try {
-            $UserSharepoint = (New-GraphGetRequest -uri "https://graph.microsoft.com/beta/users/$($userid)/drive" -AsApp $true -tenantid $tenantFilter).weburl -replace "/Documents"
-            $GainAccessJson = '{"SecondaryContact":"' + $request.body.OnedriveAccess + '","IsCurrentUserPersonalSiteAdmin":false,"IsDelegatedAdmin":true,"UserPersonalSiteUrl":"' + $UserSharepoint + '"}'
-            $uri = "https://login.microsoftonline.com/$($Tenant)/oauth2/token"
-            $body = "resource=https://admin.microsoft.com&grant_type=refresh_token&refresh_token=$($ENV:ExchangeRefreshToken)"
-            $token = Invoke-RestMethod $uri -Body $body -ContentType "application/x-www-form-urlencoded" -ErrorAction SilentlyContinue -Method post
-            $OwnershipOnedrive = Invoke-RestMethod -ContentType "application/json;charset=UTF-8" -Uri 'https://admin.microsoft.com/admin/api/users/setSecondaryOwner' -Body $GainAccessJson -Method POST -Headers @{
-                Authorization            = "Bearer $($token.access_token)";
-                "x-ms-client-request-id" = [guid]::NewGuid().ToString();
-                "x-ms-client-session-id" = [guid]::NewGuid().ToString()
-                'x-ms-correlation-id'    = [guid]::NewGuid()
-                'X-Requested-With'       = 'XMLHttpRequest' 
-            }
-            "Users Onedrive url is $UserSharepoint. Access has been given to $($request.body.onedriveaccess)"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Gave $($Request.body.onedriveaccess) access to $($username) onedrive" -Sev "Info" -tenant $TenantFilter
-
-        }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not add new owner to Onedrive $($request.body.AccessAutomap) on $($username)" -Sev "Error" -tenant $TenantFilter
-
-            "Could not add owner to Onedrive for $($username). Error: $($_.Exception.Message)"
-        }
-    }
-    { $_."AccessNoAutomap" -ne "" } { 
-        try {
-            $ImportedSession = Import-PSSession $session -ea Stop -AllowClobber -CommandName "Add-mailboxPermission"
-            $MailboxPerms = Add-MailboxPermission -identity $userid -user $Request.body.AccessNoAutomap -automapping $false -AccessRights FullAccess -InheritanceType All
-            "added $($Request.body.AccessNoAutomap) to $($username) Shared Mailbox without automapping"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Gave full permissions to $($request.body.AccessNoAutomap) on $($username)" -Sev "Info" -tenant $TenantFilter
-
-        }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not add mailbox permissions for $($request.body.AccessAutomap) on $($username)" -Sev "Error" -tenant $TenantFilter
-
-            "Could not add shared mailbox permissions for $($username). Error: $($_.Exception.Message)"
-        }
-    }
-    { $_."AccessAutomap" -ne "" } { 
-        try {
-            $ImportedSession = Import-PSSession $session -ea Stop -AllowClobber -CommandName "Add-mailboxPermission"
-            $MailboxPerms = Add-MailboxPermission -identity $userid -user $Request.body.AccessAutomap -automapping $true -AccessRights FullAccess -InheritanceType All
-            "added $($Request.body.AccessAutomap) to $($username) Shared Mailbox with automapping"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Gave full permissions to $($request.body.AccessAutomap) on $($username)" -Sev "Info" -tenant $TenantFilter
-
-        }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not add mailbox permissions for $($request.body.AccessAutomap) on $($username)" -Sev "Error" -tenant $TenantFilter
-
-            "Could not add shared mailbox permissions for $($username). Error: $($_.Exception.Message)"
-        }
-    }
     
-    { $_."OOO" -ne "" } { 
-        try {
-            $ImportedSession = Import-PSSession $session -ea Stop -AllowClobber -CommandName "Set-MailboxAutoReplyConfiguration"
-            $MailboxPerms = Set-MailboxAutoReplyConfiguration -Identity $userid -AutoReplyState Enabled -InternalMessage $_."OOO" -ExternalMessage $_."OOO"
-            "added Out-of-office to $username"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Set Out-of-office for $($username)" -Sev "Info" -tenant $TenantFilter
+        { $_."OOO" -ne "" } { 
+            Set-CIPPOutOfOffice -tenantFilter $tenantFilter -userid $username -OOO $request.body.OOO -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
+        }
+        { $_."forward" -ne "" } { 
+            Set-CIPPForwarding -userid $userid -username $username -tenantFilter $Tenantfilter -Forward $request.body.forward -KeepCopy [bool]$request.body.keepCopy -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
+        }
+        { $_."RemoveLicenses" -eq 'true' } {
+            Remove-CIPPLicense -userid $userid -username $Username -tenantFilter $Tenantfilter -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
+        }
 
+        { $_."Deleteuser" -eq 'true' } {
+            Remove-CIPPUser -userid $userid -username $Username -tenantFilter $Tenantfilter -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
         }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not add OOO for $($username)" -Sev "Error" -tenant $TenantFilter
 
-            "Could not add out of office message for $($username). Error: $($_.Exception.Message)"
+        { $_."RemoveRules" -eq 'true' } {
+            Remove-CIPPRules -userid $userid -username $Username -tenantFilter $Tenantfilter -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
         }
-    }
-    { $_."forward" -ne "" } { 
-        try {
-            $ImportedSession = Import-PSSession $session -ea Stop -AllowClobber -CommandName "Set-Mailbox"
-            $MailboxPerms = Set-mailbox -Identity $userid -ForwardingAddress $_.forward -DeliverToMailboxAndForward $true
-            "Forwarding all email for $username to $($_.Forward)"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Set Forwarding for $($username) to $($_.Forward)" -Sev "Info" -tenant $TenantFilter
 
+        { $_."RemoveMobile" -eq 'true' } {
+            Remove-CIPPMobileDevice -userid $userid -username $Username -tenantFilter $Tenantfilter -ExecutingUser $request.headers.'x-ms-client-principal' -APIName "ExecOffboardUser"
         }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not add forwarding for $($username)" -Sev "Error" -tenant $TenantFilter
-
-            "Could not add forwarding for $($username). Error: $($_.Exception.Message)"
-        }
-    }
-    { $_."RemoveLicenses" -eq 'true' } {
-        try {
-            $CurrentLicenses = (New-GraphGetRequest -uri "https://graph.microsoft.com/beta/users/$($userid)" -tenantid $tenantFilter).assignedlicenses.skuid
-            $LicensesToRemove = if ($CurrentLicenses) { ConvertTo-Json @( $CurrentLicenses) } else { "[]" }
-            $LicenseBody = '{"addLicenses": [], "removeLicenses": ' + $LicensesToRemove + '}'
-            $LicRequest = New-GraphPostRequest -uri "https://graph.microsoft.com/beta/users/$($userid)/assignlicense" -tenantid $tenantFilter -type POST -body $LicenseBody -verbose
-            "Removed current licenses: $(($ConvertTable | Where-Object { $_.guid -in $CurrentLicenses }).'Product_Display_Name' -join ',')"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Removed all licenses for $($username)" -Sev "Info" -tenant $TenantFilter
-           
-        }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not remove licenses for $($username)" -Sev "Error" -tenant $TenantFilter
-
-            "Could not remove licenses for $($username). Error: $($_.Exception.Message)"
-        }
-    }
-
-    { $_."Deleteuser" -eq 'true' } {
-        try {
-            $DeleteRequest = New-GraphPostRequest -uri "https://graph.microsoft.com/beta/users/$($userid)" -type DELETE -tenant $TenantFilter
-            "Deleted the user account"
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Deleted account $($username)" -Sev "Info" -tenant $TenantFilter
-
-        }
-        catch {
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Could not delete $($username)" -Sev "Error" -tenant $TenantFilter
-            "Could not delete $($username). Error: $($_.Exception.Message)"
-        }
-    }
     
+    }
+    $StatusCode = [HttpStatusCode]::OK
+    $body = [pscustomobject]@{"Results" = @($results) }
 }
-Get-PSSession | Remove-PSSession
-$body = [pscustomobject]@{"Results" = @($results) }
-
-
-# Associate values to output bindings by calling 'Push-OutputBinding'.
+catch {
+    $StatusCode = [HttpStatusCode]::Forbidden
+    $body = $_.Exception.message
+}
 Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
-        StatusCode = [HttpStatusCode]::OK
+        StatusCode = $StatusCode
         Body       = $Body
-    })
+    }) 

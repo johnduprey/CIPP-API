@@ -4,17 +4,23 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 
 $ID = $request.query.id
 try {
-    Remove-Item "Config\$($ID).IntuneTemplate.json" -Force
-    Log-Request -user $request.headers.'x-ms-client-principal'  -API $APINAME  -message "Removed Intune Template with ID $ID." -Sev "Info"
+    $Table = Get-CippTable -tablename 'templates'
+    Write-Host $id
+
+    $Filter = "PartitionKey eq 'IntuneTemplate' and RowKey eq '$id'" 
+    Write-Host $Filter
+    $ClearRow = Get-AzDataTableEntity @Table -Filter $Filter
+    Remove-AzDataTableEntity @Table -Entity $clearRow
+    Write-LogMessage -user $request.headers.'x-ms-client-principal'  -API $APINAME  -message "Removed Intune Template with ID $ID." -Sev "Info"
     $body = [pscustomobject]@{"Results" = "Successfully removed Intune Template" }
 }
 catch {
-    Log-Request -user $request.headers.'x-ms-client-principal'  -API $APINAME  -message "Failed to remove intune template $ID. $($_.Exception.Message)" -Sev "Error"
-    $body = [pscustomobject]@{"Results" = "Failed to remove template" }
+    Write-LogMessage -user $request.headers.'x-ms-client-principal'  -API $APINAME  -message "Failed to remove intune template $ID. $($_.Exception.Message)" -Sev "Error"
+    $body = [pscustomobject]@{"Results" = "Failed to remove template: $($_.Exception.Message)" }
 }
 
 

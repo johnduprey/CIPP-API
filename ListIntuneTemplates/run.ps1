@@ -4,13 +4,26 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Set-Location (Get-Item $PSScriptRoot).Parent.FullName
 
+$Table = Get-CippTable -tablename 'templates'
 
-# Write to the Azure Functions log stream.
-Write-Host "PowerShell HTTP trigger function processed a request."
-Write-Host $Request.query.id
-$Templates = Get-ChildItem "Config\*.IntuneTemplate.json" | ForEach-Object { Get-Content $_ | ConvertFrom-Json }
+$Templates = Get-ChildItem "Config\*.IntuneTemplate.json" | ForEach-Object {
+    $Entity = @{
+        JSON         = "$(Get-Content $_)"
+        RowKey       = "$($_.name)"
+        PartitionKey = "IntuneTemplate"
+        GUID         = "$($_.name)"
+    }
+    Add-AzDataTableEntity @Table -Entity $Entity -Force
+}
+
+#List new policies
+$Table = Get-CippTable -tablename 'templates'
+$Filter = "PartitionKey eq 'IntuneTemplate'" 
+$Templates = (Get-AzDataTableEntity @Table -Filter $Filter).JSON | ConvertFrom-Json
+
 if ($Request.query.ID) { $Templates = $Templates | Where-Object -Property guid -EQ $Request.query.id }
 
 

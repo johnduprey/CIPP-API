@@ -4,7 +4,7 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME -message 'Accessed this API' -Sev 'Debug'
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -message 'Accessed this API' -Sev 'Debug'
 
 $tenantDisplayName = $request.body.displayName
 $tenantDefaultDomainName = $request.body.defaultDomainName
@@ -12,36 +12,31 @@ $Tenant = $request.body.tenantid
 $customerContextId = $request.body.customerId
 
 $tokens = try {
-
     $AADGraphtoken = (Get-GraphToken -scope 'https://graph.windows.net/.default')
     $allTenantsDetails = (Invoke-RestMethod -Method GET -Uri 'https://graph.windows.net/myorganization/contracts?api-version=1.6' -ContentType 'application/json' -Headers $AADGraphtoken)
     $tenantObjectId = $allTenantsDetails.value | Where-Object { $_.customerContextId -eq $customerContextId } | Select-Object 'objectId'
-} catch {
-    "Failed to retrieve list of tenants.  Error: $($_.ExceptionMessage)"
-    Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $($tenantDisplayName) -message "Failed to retrieve list of tenants. Error: $($_.Exception.Message)" -Sev 'Error'
+}
+catch {
+    "Failed to retrieve list of tenants.  Error: $($_.Exception.Message)"
+    Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $($tenantDisplayName) -message "Failed to retrieve list of tenants. Error: $($_.Exception.Message)" -Sev 'Error'
 }
 
 
-$results = if ($tenantObjectId) {
+if ($tenantObjectId) {
     try {
         $bodyToPatch = '{"displayName":"' + $tenantDisplayName + '","defaultDomainName":"' + $tenantDefaultDomainName + '"}'
-        $patchTenant = (Invoke-RestMethod -Method PATCH -Uri "https://graph.windows.net/myorganization/contracts/$($tenantObjectId.objectId)?api-version=1.6" -Body $bodyToPatch -ContentType 'application/json' -Headers $AADGraphtoken)    
-        
-        if (Test-Path -Path '.\tenants.cache.json') {
-            try {
-                Remove-CIPPCache
-            }
-            catch { 
-                'There was an error removing the tenants cache for some reason.' 
-            } 
-        }
-        Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $($Tenant) -message "Edited tenant $($Tenant)" -Sev 'Info'
-        "Successfully amended details for $($Tenant) and cleared tenant cache"
+        $patchTenant = (Invoke-RestMethod -Method PATCH -Uri "https://graph.windows.net/myorganization/contracts/$($tenantObjectId.objectId)?api-version=1.6" -Body $bodyToPatch -ContentType 'application/json' -Headers $AADGraphtoken -ErrorAction Stop)    
+        $Filter = "PartitionKey eq 'Tenants' and defaultDomainName eq '{0}'" -f $tenantDefaultDomainName
+        $TenantsTable = Get-CippTable -tablename Tenants
+        $Tenant = Get-AzDataTableEntity @TenantsTable -Filter $Filter 
+        $Tenant.displayName = $tenantDisplayName
+        Update-AzDataTableEntity @TenantsTable -Entity $Tenant
+        Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $tenantDisplayName -message "Edited tenant $tenantDisplayName" -Sev 'Info'
+        $results = "Successfully amended details for $($Tenant.displayName)"
     }
     catch { 
-        "Failed to amend details for $($Tenant): $($_.ExceptionMessage)"
-        Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $($Tenant) -message "Failed amending details $($Tenant). Error: $($_.Exception.Message)" -Sev 'Error'
-        continue
+        $results = "Failed to amend details for $tenantDisplayName : $($_.Exception.Message)"
+        Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $tenantDisplayName -message "Failed amending details $tenantDisplayName. Error: $($_.Exception.Message)" -Sev 'Error'
     }
 }
 

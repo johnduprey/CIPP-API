@@ -4,7 +4,7 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 
 $TenantFilter = $Request.Query.TenantFilter
 $UserEmail = $Request.Query.UserEmail
@@ -103,12 +103,13 @@ if ($ClientToken) {
     }
     if ($obj.BeginTwoWayAuthenticationResponse.AuthenticationResult -ne $true) {
         $Body = "Authentication Failed! Does the user have Push/Phone call MFA configured? Errorcode: $($obj.BeginTwoWayAuthenticationResponse.result.value | Out-String)"
+        $colour = 'danger'
     }
     
 }
 
-$Results = [pscustomobject]@{"Results" = $Body }
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Sent push request to $UserEmail - Result: $($obj.BeginTwoWayAuthenticationResponse.result.value | Out-String)" -Sev "Info"
+$Results = [pscustomobject]@{"Results" = $Body; colour = $colour }
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Sent push request to $UserEmail - Result: $($obj.BeginTwoWayAuthenticationResponse.result.value | Out-String)" -Sev "Info"
 
 Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
         StatusCode = [HttpStatusCode]::OK

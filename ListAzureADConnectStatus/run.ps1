@@ -4,7 +4,7 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 
 
 # Write to the Azure Functions log stream.
@@ -15,15 +15,17 @@ $TenantFilter = $Request.Query.TenantFilter
 $DataToReturn = $Request.Query.DataToReturn
 
 if (($DataToReturn -eq 'AzureADConnectSettings') -or ([string]::IsNullOrEmpty($DataToReturn)) ) {
-    $ADConnectStatusGraph = New-ClassicAPIGetRequest -Resource "74658136-14ec-4630-ad9b-26e160ff0fc6" -TenantID $TenantFilter -Uri "https://main.iam.ad.ext.azure.com/api/Directories/ADConnectStatus" -Method "GET"
-    $PasswordSyncStatusGraph = New-ClassicAPIGetRequest -Resource "74658136-14ec-4630-ad9b-26e160ff0fc6" -TenantID $TenantFilter -Uri "https://main.iam.ad.ext.azure.com/api/Directories/GetPasswordSyncStatus" -Method "GET"
+    $ADConnectStatusGraph = New-GraphGetRequest -uri "https://graph.microsoft.com/beta/organization" -tenantid $TenantFilter
+    #$ADConnectStatusGraph = New-ClassicAPIGetRequest -Resource "74658136-14ec-4630-ad9b-26e160ff0fc6" -TenantID $TenantFilter -Uri "https://main.iam.ad.ext.azure.com/api/Directories/ADConnectStatus" -Method "GET"
+    #$PasswordSyncStatusGraph = New-ClassicAPIGetRequest -Resource "74658136-14ec-4630-ad9b-26e160ff0fc6" -TenantID $TenantFilter -Uri "https://main.iam.ad.ext.azure.com/api/Directories/GetPasswordSyncStatus" -Method "GET"
     $AzureADConnectSettings = [PSCustomObject]@{
-        dirSyncEnabled                   = $ADConnectStatusGraph.dirSyncEnabled
-        dirSyncConfigured                = $ADConnectStatusGraph.dirSyncConfigured
-        passThroughAuthenticationEnabled = $ADConnectStatusGraph.passThroughAuthenticationEnabled
-        seamlessSingleSignOnEnabled      = $ADConnectStatusGraph.seamlessSingleSignOnEnabled
-        numberOfHoursFromLastSync        = $ADConnectStatusGraph.numberOfHoursFromLastSync
-        passwordSyncStatus               = $PasswordSyncStatusGraph
+        dirSyncEnabled                   = [boolean]$ADConnectStatusGraph.onPremisesSyncEnabled
+        #dirSyncConfigured                = [boolean]$ADConnectStatusGraph.dirSyncConfigured
+        #passThroughAuthenticationEnabled = [boolean]$ADConnectStatusGraph.passThroughAuthenticationEnabled
+        #seamlessSingleSignOnEnabled      = [boolean]$ADConnectStatusGraph.seamlessSingleSignOnEnabled
+        numberOfHoursFromLastSync        = $ADConnectStatusGraph.onPremisesLastSyncDateTime
+        #passwordSyncStatus               = [boolean]$PasswordSyncStatusGraph
+        raw                              = $ADConnectStatusGraph
     }
 }
 

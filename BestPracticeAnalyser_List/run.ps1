@@ -4,22 +4,23 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 
+$Tenants = Get-Tenants
+$Table = get-cipptable 'cachebpa'
+$Results = (Get-AzDataTableEntity @Table) | ForEach-Object { 
+    $_.UnusedLicenseList = @(ConvertFrom-Json -ErrorAction silentlycontinue -InputObject $_.UnusedLicenseList)
+    $_
+}
 
-# Write to the Azure Functions log stream.
-Write-Host "PowerShell HTTP trigger function processed a request."
-
-# Get all the things
-$UnfilteredResults = Get-ChildItem ".\Cache_BestPracticeAnalyser\*.json" | ForEach-Object{Get-Content $_.FullName | Out-String | ConvertFrom-Json}
-
-# Need to apply exclusion logic
-$Skiplist = Get-Content "ExcludedTenants" | ConvertFrom-Csv -Delimiter "|" -Header "Name", "User", "Date"
-
-$Results = $UnfilteredResults | Where-Object {$_.Tenant -notin $Skiplist.Name}
-
+if (!$Results) {
+    $Results = @{
+        Tenant = "The BPA has not yet run."
+    }
+}
+Write-Host ($Tenants | ConvertTo-Json)
 # Associate values to output bindings by calling 'Push-OutputBinding'.
 Push-OutputBinding -Name Response -Value ([HttpResponseContext]@{
         StatusCode = [HttpStatusCode]::OK
-        Body       = @($Results)
+        Body       = @(($Results | Where-Object -Property RowKey -In $Tenants.customerId))
     })

@@ -1,15 +1,26 @@
 param($Context)
 
-New-Item "Cache_Standards" -ItemType Directory -ErrorAction SilentlyContinue
-New-Item "Cache_Standards\CurrentlyRunning.txt" -ItemType File -Force
+$DurableRetryOptions = @{
+  FirstRetryInterval  = (New-TimeSpan -Seconds 5)
+  MaxNumberOfAttempts = 3
+  BackoffCoefficient  = 2
+}
+$RetryOptions = New-DurableRetryOptions @DurableRetryOptions
 
-
-$Batch = (Invoke-DurableActivity -FunctionName 'Standards_GetQueue' -Input 'LetsGo')
+$Batch = (Invoke-ActivityFunction -FunctionName 'Standards_GetQueue' -Input 'LetsGo')
 $ParallelTasks = foreach ($Item in $Batch) {
-  Invoke-DurableActivity -FunctionName "Standards_$($item['Standard'])"-Input $item['Tenant'] -NoWait
+  if ($item['Standard']) {
+    try {
+      Invoke-DurableActivity -FunctionName "Standards_$($item['Standard'])" -Input "$($item['Tenant'])" -NoWait -RetryOptions $RetryOptions
+    }
+    catch {
+      Write-LogMessage -API 'Standards' -tenant $tenant -message "Task error: $($_.Exception.Message)" -sev Error
+
+    }
+  }
 }
 
-$Outputs = Wait-ActivityFunction -Task $ParallelTasks
-Write-Host $Outputs
-Remove-Item "Cache_Standards\CurrentlyRunning.txt" -Force
-Log-request  -API "Standards" -tenant $tenant -message "Deployment finished." -sev Info
+if (($ParallelTasks).count -gt 0) { 
+  $Outputs = Wait-ActivityFunction -Task $ParallelTasks
+  Write-LogMessage -API 'Standards' -tenant $tenant -message 'Deployment finished.' -sev Info
+}

@@ -4,72 +4,78 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME -message 'Accessed this API' -Sev 'Debug'
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -message 'Accessed this API' -Sev 'Debug'
 
 # List of supported resolvers
 $ValidResolvers = @(
     'Google'
     'Cloudflare'
+    'Quad9'
 )
-
-$ConfigPath = 'Config/DnsConfig.json'
 
 # Write to the Azure Functions log stream.
 Write-Host 'PowerShell HTTP trigger function processed a request.'
 
 $StatusCode = [HttpStatusCode]::OK
 try {
-    $Config = ''
-    if (Test-Path $ConfigPath) {
-        try {
-            # Try to parse config file and catch exceptions
-            $Config = Get-Content -Path $ConfigPath | ConvertFrom-Json
+    $ConfigTable = Get-CippTable -tablename Config
+    $Filter = "PartitionKey eq 'Domains' and RowKey eq 'Domains'"
+    $Config = Get-AzDataTableEntity @ConfigTable -Filter $Filter
+
+    $DomainTable = Get-CippTable -tablename 'Domains'
+
+    if ($ValidResolvers -notcontains $Config.Resolver) {
+        $Config = @{
+            PartitionKey = 'Domains'
+            RowKey       = 'Domains'
+            Resolver     = 'Google'
         }
-        catch {}
-    }
-    if ($Config -eq '') {
-        New-Item 'Config' -ItemType Directory -ErrorAction SilentlyContinue | Out-Null
-        $Config = [PSCustomObject]@{
-            Resolver = 'Google'
-        }
-        $Config | ConvertTo-Json | Set-Content $ConfigPath
+        Add-AzDataTableEntity @ConfigTable -Entity $Config -Force
     }
 
     $updated = $false
 
-    # Interact with query parameters or the body of the request.
-    if ($Request.Query.Action -eq 'SetConfig') {
-        if ($Request.Query.Resolver) {
-            $Resolver = $Request.Query.Resolver
-            if ($ValidResolvers -contains $Resolver) {
-                try {
-                    $Config.Resolver = $Resolver
-                }
-                catch {
-                    $Config = [PSCustomObject]@{
-                        Resolver = $Resolver
+    switch ($Request.Query.Action) {
+        'SetConfig' {
+            if ($Request.Query.Resolver) {
+                $Resolver = $Request.Query.Resolver
+                if ($ValidResolvers -contains $Resolver) {
+                    try {
+                        $Config.Resolver = $Resolver
                     }
+                    catch {
+                        $Config = @{
+                            Resolver = $Resolver
+                        }
+                    }
+                    $updated = $true
                 }
-                $updated = $true
+            }
+            if ($updated) {
+                Add-AzDataTableEntity @ConfigTable -Entity $Config -Force
+                Write-LogMessage -API $APINAME -tenant 'Global' -user $request.headers.'x-ms-client-principal' -message 'DNS configuration updated' -Sev 'Info' 
+                $body = [pscustomobject]@{'Results' = 'Success: DNS configuration updated.' }
+            }
+            else {
+                $StatusCode = [HttpStatusCode]::BadRequest
+                $body = [pscustomobject]@{'Results' = 'Error: No DNS resolver provided.' }
             }
         }
-        if ($updated) {
-            $Config | ConvertTo-Json | Set-Content $ConfigPath
-            Log-Request -API $APINAME -tenant 'Global' -user $request.headers.'x-ms-client-principal' -message 'DNS configuration updated' -Sev 'Info' 
-            $body = [pscustomobject]@{'Results' = 'Success: DNS configuration updated.' }
+        'GetConfig' {
+            $body = [pscustomobject]$Config
+            Write-LogMessage -API $APINAME -tenant 'Global' -user $request.headers.'x-ms-client-principal' -message 'Retrieved DNS configuration' -Sev 'Info' 
         }
-        else {
-            $StatusCode = [HttpStatusCode]::BadRequest
-            $body = [pscustomobject]@{'Results' = 'Error: No DNS resolver provided.' }
+        'RemoveDomain' {
+            $Filter = "RowKey eq '{0}'" -f $Request.Query.Domain
+            $DomainRow = Get-AzDataTableEntity @DomainTable -Filter $Filter 
+            Remove-AzDataTableEntity @DomainTable -Entity $DomainRow
+            Write-LogMessage -API $APINAME -tenant 'Global' -user $request.headers.'x-ms-client-principal' -message "Removed Domain - $($Request.Query.Domain) " -Sev 'Info'
+            $body = [pscustomobject]@{ 'Results' = "Domain removed - $($Request.Query.Domain)" }
         }
-    }
-    elseif ($Request.Query.Action -eq 'GetConfig') {
-        $body = $Config
-        Log-Request -API $APINAME -tenant 'Global' -user $request.headers.'x-ms-client-principal' -message 'Retrieved DNS configuration' -Sev 'Info' 
     }
 }
 catch {
-    Log-Request -API $APINAME -tenant $($name) -user $request.headers.'x-ms-client-principal' -message "DNS Config API failed. $($_.Exception.Message)" -Sev 'Error'
+    Write-LogMessage -API $APINAME -tenant $($name) -user $request.headers.'x-ms-client-principal' -message "DNS Config API failed. $($_.Exception.Message)" -Sev 'Error'
     $body = [pscustomobject]@{'Results' = "Failed. $($_.Exception.Message)" }
     $StatusCode = [HttpStatusCode]::BadRequest
 }
