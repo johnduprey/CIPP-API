@@ -4,14 +4,17 @@ using namespace System.Net
 param($Request, $TriggerMetadata)
 
 $APIName = $TriggerMetadata.FunctionName
-Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
+Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Accessed this API" -Sev "Debug"
 $userobj = $Request.body
 $Results = [System.Collections.ArrayList]@()
 $licenses = ($userobj | Select-Object "License_*").psobject.properties.value
+$Aliases = if ($userobj.AddedAliases) { ($userobj.AddedAliases).Split([Environment]::NewLine) }
+
 # Write to the Azure Functions log stream.
 Write-Host "PowerShell HTTP trigger function processed a request."
 #Edit the user
 try {
+    Write-Host "$([boolean]$UserObj.mustchangepass)"
     $Email = "$($UserObj.username)@$($UserObj.domain)"
     $UserprincipalName = "$($UserObj.username)@$($UserObj.domain)"
     $BodyToship = [pscustomobject] @{
@@ -31,24 +34,25 @@ try {
         "streetAddress"     = $userobj.streetAddress
         "businessPhones"    = @($userobj.businessPhone)
         "passwordProfile"   = @{
-            "forceChangePasswordNextSignIn" = [bool]$UserObj.mustchangepass
+            "forceChangePasswordNextSignIn" = [boolean]$UserObj.mustchangepass
         }
     } | ForEach-Object {
-        $NonEmptyProperties = $_.psobject.Properties | Where-Object { $_.Value } | Select-Object -ExpandProperty Name
+        $NonEmptyProperties = $_.psobject.Properties | Select-Object -ExpandProperty Name
         $_ | Select-Object -Property $NonEmptyProperties | ConvertTo-Json
     }
     $GraphRequest = New-GraphPostRequest -uri "https://graph.microsoft.com/beta/users/$($userobj.Userid)" -tenantid $Userobj.tenantid -type PATCH -body $BodyToship  -verbose
     $results.add( "Success. The user has been edited." )
+    Write-LogMessage -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal' -message "Edited user $($userobj.displayname) with id $($userobj.Userid)" -Sev "Info"
     if ($userobj.password) {
-        $passwordProfile = [pscustomobject] @{"passwordProfile" = @{ "password" = $userobj.password } } | ConvertTo-Json
+        $passwordProfile = [pscustomobject]@{"passwordProfile" = @{ "password" = $userobj.password; "forceChangePasswordNextSignIn" = [boolean]$UserObj.mustchangepass } } | ConvertTo-Json
         $GraphRequest = New-GraphPostRequest -uri "https://graph.microsoft.com/beta/users/$($userobj.Userid)" -tenantid $Userobj.tenantid -type PATCH -body $PasswordProfile  -verbose
         $results.add("Success. The password has been set to $($userobj.password)")
+        Write-LogMessage -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal' -message "Reset $($userobj.displayname)'s Password" -Sev "Info"
     }
 }
 catch {
-    Log-Request -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal' -message "User edit API failed. $($_.Exception.Message)" -Sev "Error"
+    Write-LogMessage -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal' -message "User edit API failed. $($_.Exception.Message)" -Sev "Error"
     $results.add( "Failed to edit user. $($_.Exception.Message)")
-    Log-Request -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal' -message "Edited user $($userobj.displayname) with id $($userobj.Userid)" -Sev "Info"
 }
 
 
@@ -67,13 +71,13 @@ try {
         Write-Host $LicenseBody
         $LicRequest = New-GraphPostRequest -uri "https://graph.microsoft.com/beta/users/$($userobj.Userid)/assignlicense" -tenantid $Userobj.tenantid -type POST -body $LicenseBody -verbose
 
-        Log-Request -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal' -message "Changed user $($userobj.displayname) license. Sent info: $licensebody" -Sev "Info"
+        Write-LogMessage -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal' -message "Changed user $($userobj.displayname) license. Sent info: $licensebody" -Sev "Info"
         $results.add( "Success. User license has been edited." )
     }
 
 }
 catch {
-    Log-Request -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal' -message "License assign API failed. $($_.Exception.Message)" -Sev "Error"
+    Write-LogMessage -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal' -message "License assign API failed. $($_.Exception.Message)" -Sev "Error"
     $results.add( "We've failed to assign the license. $($_.Exception.Message)")
 }
 
@@ -84,14 +88,14 @@ try {
             New-GraphPostRequest -uri "https://graph.microsoft.com/beta/users/$($userobj.Userid)" -tenantid $Userobj.tenantid -type "patch" -body "{`"mail`": `"$Alias`"}" -verbose
         }
         New-GraphPostRequest -uri "https://graph.microsoft.com/beta/users/$($userobj.Userid)" -tenantid $Userobj.tenantid -type "patch" -body "{`"mail`": `"$UserprincipalName`"}" -verbose
-        Log-Request -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal'   -message "Added Aliases to $($userobj.displayname) license $($licences)" -Sev "Info"
-        $results.add( "Success. User has been edited")
+        Write-LogMessage -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal'   -message "Added Aliases to $($userobj.displayname)" -Sev "Info"
+        $results.add( "Success. added aliasses to user.")
     }
 
 }
 catch {
-    Log-Request -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal'   -message "Alias API failed. $($_.Exception.Message)" -Sev "Error"
-    $results.add( "Succesfully edited user. The password is $password. We've failed to create the Aliases: $($_.Exception.Message)")
+    Write-LogMessage -API $APINAME -tenant ($UserObj.tenantid) -user $request.headers.'x-ms-client-principal'   -message "Alias API failed. $($_.Exception.Message)" -Sev "Error"
+    $results.add( "Successfully edited user. The password is $password. We've failed to create the Aliases: $($_.Exception.Message)")
 }
 
 if ($Request.body.CopyFrom -ne "") {
@@ -99,15 +103,15 @@ if ($Request.body.CopyFrom -ne "") {
     $addmemberbody = "{ `"members@odata.bind`": $(ConvertTo-Json @($MemberIDs)) }"
         (New-GraphPostRequest -uri "https://graph.microsoft.com/beta/users/$($Request.body.CopyFrom)/GetMemberGroups" -tenantid $Userobj.tenantid -type POST -body  '{"securityEnabledOnly": false}').value | ForEach-Object {
         try {
-            $groupname = (New-GraphGetRequest -tenantid $Userobj.tenantid -asApp $true -uri "https://graph.microsoft.com/beta/groups/$($_)").displayName
+            $groupname = (New-GraphGetRequest -tenantid $Userobj.tenantid  -uri "https://graph.microsoft.com/beta/groups/$($_)").displayName
             Write-Host "name: $groupname"
-            $GroupResult = New-GraphPostRequest -AsApp $true -uri "https://graph.microsoft.com/beta/groups/$($_)" -tenantid $Userobj.tenantid -type patch -body $addmemberbody -ErrorAction Stop
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Added $($UserprincipalName) to group $groupresult.displayName)" -Sev "Info"  -tenant $TenantFilter
+            $GroupResult = New-GraphPostRequest -uri "https://graph.microsoft.com/beta/groups/$($_)" -tenantid $Userobj.tenantid -type patch -body $addmemberbody -ErrorAction Stop
+            Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME  -message "Added $($UserprincipalName) to group $groupresult.displayName)" -Sev "Info"  -tenant $TenantFilter
             $body = $results.add("Added group: $($groupname)")
         }
         catch {
             $body = $results.add("We've failed to add the group $($groupname): $($_.Exception.Message)")
-            Log-Request -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $($userobj.tenantid) -message "Failed to add group. $($_.Exception.Message)" -Sev "Error"
+            Write-LogMessage -user $request.headers.'x-ms-client-principal' -API $APINAME -tenant $($userobj.tenantid) -message "Failed to add group. $($_.Exception.Message)" -Sev "Error"
         }
     }
 

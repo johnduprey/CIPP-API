@@ -1,4 +1,6 @@
 param($name)
 
-$object = (Get-ChildItem ".\ChocoApps.Cache\*" | Where-Object { $_.name -ne "CurrentlyRunning.txt" }).name 
+$Table = Get-CippTable -tablename 'apps'
+
+$Object = (Get-AzDataTableEntity @Table).RowKey
 $object
